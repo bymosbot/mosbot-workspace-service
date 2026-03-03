@@ -53,6 +53,12 @@ describe("Symlink remapping", () => {
       expect(ctx.rootPath).toBe(wsRoot);
       expect(ctx.resolvedPath).toBe(path.join(wsRoot, "real", "file.txt"));
     });
+
+    it("routes /workspace/* virtual paths to workspace root without double nesting", () => {
+      const ctx = app._resolvePathContext("/workspace/real/file.txt");
+      expect(ctx.rootPath).toBe(wsRoot);
+      expect(ctx.resolvedPath).toBe(path.join(wsRoot, "real", "file.txt"));
+    });
   });
 
   describe("remapSymlinkTarget", () => {

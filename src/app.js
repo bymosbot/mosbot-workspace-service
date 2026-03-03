@@ -73,6 +73,18 @@ function createApp(opts) {
     return isConfigRootPath(normalizedPath) ? CONFIG_ROOT : MAIN_WORKSPACE_FS_ROOT;
   }
 
+  function getMainWorkspaceAliasPath(normalizedPath) {
+    if (normalizedPath === "/workspace") {
+      return "/";
+    }
+
+    if (normalizedPath.startsWith("/workspace/")) {
+      return normalizedPath.substring("/workspace".length) || "/";
+    }
+
+    return null;
+  }
+
   /**
    * Assert that `resolved` is within `rootPath`. Throws if it escapes.
    * Exported for direct unit testing of the defence-in-depth guard.
@@ -89,14 +101,20 @@ function createApp(opts) {
 
   function resolvePathContext(relativePath) {
     const normalizedPath = normalizeRelativePath(relativePath);
-    const rootPath = selectFsRootForPath(normalizedPath);
-    const relWithinRoot = normalizedPath.replace(/^\/+/, "");
+    const mainWorkspaceAliasPath = getMainWorkspaceAliasPath(normalizedPath);
+    const routedPath = mainWorkspaceAliasPath || normalizedPath;
+    const rootPath =
+      mainWorkspaceAliasPath !== null
+        ? MAIN_WORKSPACE_FS_ROOT
+        : selectFsRootForPath(routedPath);
+    const relWithinRoot = routedPath.replace(/^\/+/, "");
 
     const resolvedPath = path.resolve(rootPath, relWithinRoot);
     assertWithinRoot(rootPath, resolvedPath);
 
     return {
       normalizedPath,
+      routedPath,
       rootPath,
       resolvedPath,
     };
@@ -496,6 +514,7 @@ function createApp(opts) {
   app._assertWithinRoot = assertWithinRoot;
   app._normalizeRelativePath = normalizeRelativePath;
   app._selectFsRootForPath = selectFsRootForPath;
+  app._getMainWorkspaceAliasPath = getMainWorkspaceAliasPath;
   app._resolvePathContext = resolvePathContext;
   app._resolveSafePath = resolveSafePath;
   app._remapSymlinkTarget = remapSymlinkTarget;

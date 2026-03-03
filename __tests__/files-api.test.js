@@ -57,6 +57,18 @@ describe("Files API", () => {
       expect(res.body.files.some((f) => f.name === "nested.txt")).toBe(true);
     });
 
+    it("maps /workspace to the main workspace root", async () => {
+      const res = await request(app).get("/files?path=/workspace");
+      expect(res.status).toBe(200);
+      expect(res.body.files.some((f) => f.name === "hello.txt")).toBe(true);
+    });
+
+    it("maps /workspace/* paths to main workspace children without nesting", async () => {
+      const res = await request(app).get("/files?path=/workspace/subdir");
+      expect(res.status).toBe(200);
+      expect(res.body.files.some((f) => f.name === "nested.txt")).toBe(true);
+    });
+
     it("routes /workspace-<agent> paths to config root", async () => {
       const res = await request(app).get("/files?path=/workspace-cto");
       expect(res.status).toBe(200);
@@ -107,6 +119,12 @@ describe("Files API", () => {
       const res = await request(app).get("/files/content?path=/openclaw.json");
       expect(res.status).toBe(200);
       expect(res.body.content).toContain("models");
+    });
+
+    it("returns content for /workspace/* paths from main workspace root", async () => {
+      const res = await request(app).get("/files/content?path=/workspace/hello.txt");
+      expect(res.status).toBe(200);
+      expect(res.body.content).toBe("hello world");
     });
 
     it("returns 400 when path parameter is missing", async () => {

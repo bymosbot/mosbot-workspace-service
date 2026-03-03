@@ -87,9 +87,9 @@ Given `CONFIG_ROOT=/openclaw-config` and `MAIN_WORKSPACE_DIR=workspace`:
 Routing rules:
 
 - Config-root paths: `/openclaw.json`, `/org-chart.json`, `/projects/**`, `/skills/**`, `/docs/**`, `/workspace-<agent>/**`
-- Main workspace paths: `/` and any other non-config-root path
+- Main workspace canonical paths: `/workspace` and `/workspace/**` (mapped to `CONFIG_ROOT/MAIN_WORKSPACE_DIR`)
 
-Canonical main workspace virtual path is `/` only (no `/workspace` alias).
+Canonical main workspace virtual path is `/workspace`.
 
 ## API Endpoints
 
@@ -113,7 +113,7 @@ Returns workspace accessibility status.
 ### List Files
 
 ```bash
-GET /files?path=/&recursive=false
+GET /files?path=/workspace&recursive=false
 Authorization: Bearer <token>
 ```
 
