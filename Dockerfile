@@ -31,6 +31,7 @@ COPY --from=dependencies /app/node_modules ./node_modules
 
 # Copy application source
 COPY --chown=node:node server.js ./
+COPY --chown=node:node src/ ./src/
 
 # Switch to non-root user
 USER node
