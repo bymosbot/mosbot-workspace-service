@@ -24,7 +24,7 @@ Lightweight HTTP service that exposes OpenClaw workspace files over REST API. Th
 - Always use a strong, randomly generated bearer token (`openssl rand -hex 32`).
 - The service runs as a non-root user inside the container.
 - Path traversal protection is built-in and cannot be bypassed via the API.
-- Mount workspace volumes as read-only (`:ro`) when write access is not required.
+- Mount workspace volumes as read-only (`:ro`) only when write operations are intentionally disabled.
 
 See [SECURITY.md](SECURITY.md) for the full threat model and vulnerability reporting process.
 
@@ -39,8 +39,9 @@ services:
     environment:
       WORKSPACE_SERVICE_TOKEN: your-secure-token # required
       WORKSPACE_ROOT: /workspace
+      WORKSPACE_SUBDIR: .
     volumes:
-      - openclaw-workspace:/workspace:ro
+      - openclaw-home:/workspace
     ports:
       - "8080:8080"
 ```
@@ -52,10 +53,14 @@ docker run -d \
   --name mosbot-workspace \
   -e WORKSPACE_SERVICE_TOKEN=your-secure-token \
   -e WORKSPACE_ROOT=/workspace \
-  -v /path/to/openclaw/workspace:/workspace:ro \
+  -e WORKSPACE_SUBDIR=. \
+  -v /path/to/.openclaw:/workspace \
   -p 8080:8080 \
   ghcr.io/bymosbot/mosbot-workspace-service:latest
 ```
+
+For full MosBot integration (agent discovery via `openclaw.json` + Projects/Skills/Docs CRUD), use a
+read-write mount and expose the mounted root with `WORKSPACE_SUBDIR=.`.
 
 ## Environment Variables
 
