@@ -168,6 +168,58 @@ DELETE /files?path=/path/to/file
 Authorization: Bearer <token>
 ```
 
+### Get Link State
+
+```bash
+GET /links/:type/:agentId
+Authorization: Bearer <token>
+```
+
+Returns per-agent link state for supported types.
+
+- Supported `type`: `docs`
+- `agentId`:
+  - `main` maps to `MAIN_WORKSPACE_DIR`
+  - any other valid slug maps to `workspace-<agentId>`
+- Valid states:
+  - `linked`
+  - `missing`
+  - `conflict` (includes `conflict.reason`, and `conflict.symlinkTarget` when relevant)
+
+### Ensure Link
+
+```bash
+PUT /links/:type/:agentId
+Authorization: Bearer <token>
+```
+
+For `type=docs`:
+
+- ensures `CONFIG_ROOT/docs` exists
+- ensures target workspace directory exists
+- creates a managed `docs` symlink only when missing
+- returns `action: "created"` or `action: "unchanged"`
+- returns `409 LINK_CONFLICT` for non-managed/conflicting existing paths
+
+### Delete Managed Link
+
+```bash
+DELETE /links/:type/:agentId
+Authorization: Bearer <token>
+```
+
+For `type=docs`:
+
+- removes only the managed symlink targeting `CONFIG_ROOT/docs`
+- returns `action: "deleted"` or `action: "unchanged"` (when already missing)
+- returns `409 LINK_CONFLICT` for non-managed/conflicting paths
+
+Error codes:
+
+- `LINK_TYPE_UNSUPPORTED` for unsupported `:type`
+- `INVALID_AGENT_ID` for invalid `:agentId`
+- `LINK_CONFLICT` for conflicting existing paths
+
 ## Development
 
 ### Local Development

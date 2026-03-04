@@ -13,6 +13,12 @@ const ALLOWED_CONFIG_PREFIXES = [
 ];
 const WORKSPACE_AGENT_PATH_PATTERN = /^\/workspace-[^/]+(?:\/.*)?$/;
 const PATH_NOT_ALLOWED_CODE = "PATH_NOT_ALLOWED";
+const SHARED_DOCS_DIR = "docs";
+const SUPPORTED_LINK_TYPE = "docs";
+const LINK_TYPE_UNSUPPORTED_CODE = "LINK_TYPE_UNSUPPORTED";
+const INVALID_AGENT_ID_CODE = "INVALID_AGENT_ID";
+const LINK_CONFLICT_CODE = "LINK_CONFLICT";
+const AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
 function buildPathNotAllowedErrorPayload(err) {
   return {
@@ -316,6 +322,136 @@ function createApp(opts) {
     }
   }
 
+  function pathNotFound(error) {
+    return error && error.code === "ENOENT";
+  }
+
+  function buildUnsupportedLinkTypePayload(linkType) {
+    return {
+      error: "Unsupported link type",
+      code: LINK_TYPE_UNSUPPORTED_CODE,
+      type: linkType,
+    };
+  }
+
+  function buildInvalidAgentIdPayload(agentId) {
+    return {
+      error: "Invalid agent ID",
+      code: INVALID_AGENT_ID_CODE,
+      agentId,
+    };
+  }
+
+  function resolveAgentWorkspaceDirName(agentId) {
+    if (agentId === "main") {
+      return mainWorkspaceDir;
+    }
+
+    if (!AGENT_ID_PATTERN.test(agentId)) {
+      return null;
+    }
+
+    return `workspace-${agentId}`;
+  }
+
+  function resolveWorkspaceVirtualPath(agentId) {
+    return agentId === "main" ? "/workspace" : `/workspace-${agentId}`;
+  }
+
+  function buildDocsLinkContext(linkType, agentId) {
+    if (linkType !== SUPPORTED_LINK_TYPE) {
+      return {
+        ok: false,
+        status: 400,
+        payload: buildUnsupportedLinkTypePayload(linkType),
+      };
+    }
+
+    const workspaceDirName = resolveAgentWorkspaceDirName(agentId);
+    if (!workspaceDirName) {
+      return {
+        ok: false,
+        status: 400,
+        payload: buildInvalidAgentIdPayload(agentId),
+      };
+    }
+
+    const workspacePath = path.resolve(CONFIG_ROOT, workspaceDirName);
+    const targetPath = path.resolve(CONFIG_ROOT, SHARED_DOCS_DIR);
+    const linkPath = path.resolve(workspacePath, SHARED_DOCS_DIR);
+    assertWithinRoot(CONFIG_ROOT, workspacePath);
+    assertWithinRoot(CONFIG_ROOT, targetPath);
+    assertWithinRoot(CONFIG_ROOT, linkPath);
+
+    const workspaceVirtualPath = resolveWorkspaceVirtualPath(agentId);
+
+    return {
+      ok: true,
+      linkType,
+      agentId,
+      workspacePath,
+      targetPath,
+      linkPath,
+      workspaceVirtualPath,
+      linkVirtualPath: `${workspaceVirtualPath}/${SHARED_DOCS_DIR}`,
+      targetVirtualPath: `/${SHARED_DOCS_DIR}`,
+    };
+  }
+
+  async function inspectDocsLinkState(context) {
+    try {
+      const lstat = await fs.lstat(context.linkPath);
+
+      if (!lstat.isSymbolicLink()) {
+        return {
+          state: "conflict",
+          conflict: {
+            reason: "Path exists and is not a symlink",
+          },
+        };
+      }
+
+      const symlinkTarget = await fs.readlink(context.linkPath);
+      const resolvedLinkTarget = path.resolve(
+        path.dirname(context.linkPath),
+        symlinkTarget,
+      );
+      if (resolvedLinkTarget !== context.targetPath) {
+        return {
+          state: "conflict",
+          conflict: {
+            reason: "Symlink points to unexpected target",
+            symlinkTarget,
+          },
+        };
+      }
+
+      return {
+        state: "linked",
+        symlinkTarget,
+      };
+    } catch (error) {
+      if (pathNotFound(error)) {
+        return {
+          state: "missing",
+        };
+      }
+      throw error;
+    }
+  }
+
+  function buildLinkResponsePayload(context, stateResult) {
+    return {
+      type: context.linkType,
+      agentId: context.agentId,
+      workspaceVirtualPath: context.workspaceVirtualPath,
+      linkVirtualPath: context.linkVirtualPath,
+      targetVirtualPath: context.targetVirtualPath,
+      state: stateResult.state,
+      ...(stateResult.conflict ? { conflict: stateResult.conflict } : {}),
+    };
+  }
+
   // ── Routes ─────────────────────────────────────────────────────────────────
 
   app.get("/health", (req, res) => {
@@ -531,6 +667,93 @@ function createApp(opts) {
       if (error.code === "ENOENT") {
         return res.status(404).json({ error: "Path not found" });
       }
+      next(error);
+    }
+  });
+
+  app.get("/links/:type/:agentId", optionalAuth, async (req, res, next) => {
+    try {
+      const contextResult = buildDocsLinkContext(req.params.type, req.params.agentId);
+      if (!contextResult.ok) {
+        return res.status(contextResult.status).json(contextResult.payload);
+      }
+
+      const stateResult = await inspectDocsLinkState(contextResult);
+      return res.json(buildLinkResponsePayload(contextResult, stateResult));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.put("/links/:type/:agentId", optionalAuth, async (req, res, next) => {
+    try {
+      const contextResult = buildDocsLinkContext(req.params.type, req.params.agentId);
+      if (!contextResult.ok) {
+        return res.status(contextResult.status).json(contextResult.payload);
+      }
+
+      await fs.mkdir(contextResult.targetPath, { recursive: true });
+      await fs.mkdir(contextResult.workspacePath, { recursive: true });
+
+      const stateResult = await inspectDocsLinkState(contextResult);
+      if (stateResult.state === "conflict") {
+        return res.status(409).json({
+          error: "Link conflict",
+          code: LINK_CONFLICT_CODE,
+          ...buildLinkResponsePayload(contextResult, stateResult),
+        });
+      }
+
+      if (stateResult.state === "linked") {
+        return res.json({
+          action: "unchanged",
+          ...buildLinkResponsePayload(contextResult, stateResult),
+        });
+      }
+
+      const relativeTarget =
+        path.relative(contextResult.workspacePath, contextResult.targetPath) || ".";
+      await fs.symlink(relativeTarget, contextResult.linkPath);
+
+      const createdState = await inspectDocsLinkState(contextResult);
+      return res.json({
+        action: "created",
+        ...buildLinkResponsePayload(contextResult, createdState),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/links/:type/:agentId", optionalAuth, async (req, res, next) => {
+    try {
+      const contextResult = buildDocsLinkContext(req.params.type, req.params.agentId);
+      if (!contextResult.ok) {
+        return res.status(contextResult.status).json(contextResult.payload);
+      }
+
+      const stateResult = await inspectDocsLinkState(contextResult);
+      if (stateResult.state === "conflict") {
+        return res.status(409).json({
+          error: "Link conflict",
+          code: LINK_CONFLICT_CODE,
+          ...buildLinkResponsePayload(contextResult, stateResult),
+        });
+      }
+
+      if (stateResult.state === "missing") {
+        return res.json({
+          action: "unchanged",
+          ...buildLinkResponsePayload(contextResult, stateResult),
+        });
+      }
+
+      await fs.unlink(contextResult.linkPath);
+      return res.json({
+        action: "deleted",
+        ...buildLinkResponsePayload(contextResult, { state: "missing" }),
+      });
+    } catch (error) {
       next(error);
     }
   });
