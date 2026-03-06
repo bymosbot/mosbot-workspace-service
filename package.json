@@ -1,6 +1,6 @@
 {
   "name": "mosbot-workspace-service",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "HTTP service for OpenClaw workspace file access - MosBot OS sidecar",
   "main": "server.js",
   "repository": {
