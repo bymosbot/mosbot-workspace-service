@@ -13,7 +13,7 @@
 Key risks to be aware of:
 
 - **File write/delete access**: The `POST /files`, `PUT /files`, and `DELETE /files` endpoints can modify or remove files on the mounted workspace volume. Always use a strong `WORKSPACE_SERVICE_TOKEN` and restrict network access.
-- **Path traversal**: Built-in path traversal protection rejects requests that escape the configured `WORKSPACE_ROOT`/`WORKSPACE_SUBDIR`. Do not disable or weaken this check.
+- **Path traversal**: Built-in path traversal protection rejects requests that escape `CONFIG_ROOT` or `CONFIG_ROOT/<MAIN_WORKSPACE_DIR>`. Do not disable or weaken this check.
 - **Symlink following**: The service follows symlinks to support cross-container paths. Ensure the workspace volume only contains trusted content.
 - **Token exposure**: Never log or expose `WORKSPACE_SERVICE_TOKEN` in application logs, metrics, or error responses.
 
@@ -38,6 +38,6 @@ We aim to acknowledge reports within **48 hours** and provide a resolution timel
 
 - Always set `WORKSPACE_SERVICE_TOKEN` to a strong random value (e.g. `openssl rand -hex 32`)
 - Mount workspace volumes as read-only (`:ro`) when write access is not required
-- Never expose port 8080 directly to the public internet — use a VPN, internal network, or Kubernetes `ClusterIP` service
+- Never expose port 18780 directly to the public internet — use a VPN, internal network, or Kubernetes `ClusterIP` service
 - Run the container as a non-root user (the default `node` user is used in the official Docker image)
 - Keep the image up to date to receive security patches

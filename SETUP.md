@@ -89,13 +89,14 @@ docker build -t mosbot-workspace-service:test .
 docker run -d \
   --name mosbot-workspace-test \
   -e WORKSPACE_SERVICE_TOKEN=test-token \
-  -e WORKSPACE_ROOT=/workspace \
-  -v /tmp/test-workspace:/workspace \
-  -p 8080:8080 \
+  -e CONFIG_ROOT=/openclaw-config \
+  -e MAIN_WORKSPACE_DIR=workspace \
+  -v /tmp/test-config:/openclaw-config \
+  -p 18780:18780 \
   mosbot-workspace-service:test
 
 # Test health endpoint
-curl http://localhost:8080/health
+curl http://localhost:18780/health
 
 # Cleanup
 docker stop mosbot-workspace-test

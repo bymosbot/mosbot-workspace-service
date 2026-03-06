@@ -17,14 +17,14 @@ Lightweight HTTP service that exposes OpenClaw workspace files over REST API. Th
 
 ## Security
 
-> **This service can read, write, and delete files on the mounted workspace volume. Treat it as a privileged internal API.**
+> **This service can read, write, and delete files under the mounted OpenClaw root. Treat it as a privileged internal API.**
 
 - **Authentication is required** — `WORKSPACE_SERVICE_TOKEN` must be set. The service will refuse to start without it.
-- **Never expose port 8080 to the public internet** — use a VPN, private network, or Kubernetes `ClusterIP` service.
+- **Never expose port 18780 to the public internet** — use a VPN, private network, or Kubernetes `ClusterIP` service.
 - Always use a strong, randomly generated bearer token (`openssl rand -hex 32`).
 - The service runs as a non-root user inside the container.
 - Path traversal protection is built-in and cannot be bypassed via the API.
-- Mount workspace volumes as read-only (`:ro`) when write access is not required.
+- For normal MosBot usage, mount the OpenClaw root read-write so Projects/Skills/Docs and config edits can succeed.
 
 See [SECURITY.md](SECURITY.md) for the full threat model and vulnerability reporting process.
 
@@ -38,11 +38,12 @@ services:
     image: ghcr.io/bymosbot/mosbot-workspace-service:latest
     environment:
       WORKSPACE_SERVICE_TOKEN: your-secure-token # required
-      WORKSPACE_ROOT: /workspace
+      CONFIG_ROOT: /openclaw-config
+      MAIN_WORKSPACE_DIR: workspace
     volumes:
-      - openclaw-workspace:/workspace:ro
+      - /path/to/.openclaw:/openclaw-config
     ports:
-      - "8080:8080"
+      - "18780:18780"
 ```
 
 ### Docker Run
@@ -51,27 +52,48 @@ services:
 docker run -d \
   --name mosbot-workspace \
   -e WORKSPACE_SERVICE_TOKEN=your-secure-token \
-  -e WORKSPACE_ROOT=/workspace \
-  -v /path/to/openclaw/workspace:/workspace:ro \
-  -p 8080:8080 \
+  -e CONFIG_ROOT=/openclaw-config \
+  -e MAIN_WORKSPACE_DIR=workspace \
+  -v /path/to/.openclaw:/openclaw-config \
+  -p 18780:18780 \
   ghcr.io/bymosbot/mosbot-workspace-service:latest
 ```
+
+For full MosBot integration (agent discovery via `openclaw.json` + Projects/Skills/Docs CRUD), use
+a read-write mount for `CONFIG_ROOT`.
 
 ## Environment Variables
 
 | Variable                            | Default                | Description                                                                                         |
 | ----------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------- |
-| `PORT`                              | `8080`                 | HTTP server port                                                                                    |
-| `WORKSPACE_ROOT`                    | `/workspace`           | Root directory where workspace is mounted                                                           |
-| `WORKSPACE_SUBDIR`                  | `workspace`            | Subdirectory within `WORKSPACE_ROOT` to expose (prevents browsing the entire filesystem)            |
+| `PORT`                              | `18780`                | HTTP server port                                                                                    |
+| `CONFIG_ROOT`                       | `/openclaw-config`     | Absolute OpenClaw root mount containing config, shared dirs, and agent workspaces                   |
+| `MAIN_WORKSPACE_DIR`                | `workspace`            | Main workspace directory name under `CONFIG_ROOT` (single folder name only; no `/`, `\`, `.`, `..`) |
 | `WORKSPACE_SERVICE_TOKEN`           | —                      | **Required.** Bearer token for authentication. The service will not start without this.             |
 | `SYMLINK_REMAP_PREFIXES`            | `/home/node/.openclaw` | Comma-separated list of symlink prefixes to remap (for cross-container symlinks)                    |
 | `WORKSPACE_SERVICE_ALLOW_ANONYMOUS` | —                      | Set to `true` to disable auth requirement. **For local development only. Never use in production.** |
 
-> **Deprecated aliases** (still accepted for backward compatibility):
->
-> - `WORKSPACE_PATH` → use `WORKSPACE_ROOT` instead
-> - `AUTH_TOKEN` → use `WORKSPACE_SERVICE_TOKEN` instead
+Removed and no longer honored: `WORKSPACE_FS_ROOT`, `CONFIG_FS_ROOT`, `WORKSPACE_ROOT`,
+`WORKSPACE_SUBDIR`, `WORKSPACE_PATH`, `AUTH_TOKEN`.
+
+## Filesystem and Virtual Path Contract
+
+Given `CONFIG_ROOT=/openclaw-config` and `MAIN_WORKSPACE_DIR=workspace`:
+
+- Main workspace filesystem root: `/openclaw-config/workspace`
+- Sub-agent workspaces: `/openclaw-config/workspace-<agent>`
+- Shared directories: `/openclaw-config/projects`, `/openclaw-config/skills`, `/openclaw-config/docs`
+
+Routing rules:
+
+- Main workspace canonical paths: `/workspace` and `/workspace/**` (mapped to `CONFIG_ROOT/MAIN_WORKSPACE_DIR`)
+- Config-root allowlist:
+  `/openclaw.json`, `/agents.json`, `/projects/**`, `/skills/**`, `/docs/**`,
+  `/workspace-<agent>/**`, and legacy archive paths such as `/_archived_workspace_main/**`
+- All other absolute paths are denied with `403` and code `PATH_NOT_ALLOWED`
+- Virtual root `/` is not allowlisted and is denied with `403 PATH_NOT_ALLOWED`
+
+Canonical main workspace virtual path is `/workspace`.
 
 ## API Endpoints
 
@@ -95,11 +117,12 @@ Returns workspace accessibility status.
 ### List Files
 
 ```bash
-GET /files?path=/&recursive=false
+GET /files?path=/workspace&recursive=false
 Authorization: Bearer <token>
 ```
 
 List files and directories. Use `recursive=true` for recursive listing.
+`path=/` (or omitted `path`) is denied with `403 PATH_NOT_ALLOWED`.
 
 ### Get File Content
 
@@ -144,6 +167,58 @@ Content-Type: application/json
 DELETE /files?path=/path/to/file
 Authorization: Bearer <token>
 ```
+
+### Get Link State
+
+```bash
+GET /links/:type/:agentId
+Authorization: Bearer <token>
+```
+
+Returns per-agent link state for supported types.
+
+- Supported `type`: `docs`
+- `agentId`:
+  - `main` maps to `MAIN_WORKSPACE_DIR`
+  - any other valid slug maps to `workspace-<agentId>`
+- Valid states:
+  - `linked`
+  - `missing`
+  - `conflict` (includes `conflict.reason`, and `conflict.symlinkTarget` when relevant)
+
+### Ensure Link
+
+```bash
+PUT /links/:type/:agentId
+Authorization: Bearer <token>
+```
+
+For `type=docs`:
+
+- ensures `CONFIG_ROOT/docs` exists
+- ensures target workspace directory exists
+- creates a managed `docs` symlink only when missing
+- returns `action: "created"` or `action: "unchanged"`
+- returns `409 LINK_CONFLICT` for non-managed/conflicting existing paths
+
+### Delete Managed Link
+
+```bash
+DELETE /links/:type/:agentId
+Authorization: Bearer <token>
+```
+
+For `type=docs`:
+
+- removes only the managed symlink targeting `CONFIG_ROOT/docs`
+- returns `action: "deleted"` or `action: "unchanged"` (when already missing)
+- returns `409 LINK_CONFLICT` for non-managed/conflicting paths
+
+Error codes:
+
+- `LINK_TYPE_UNSUPPORTED` for unsupported `:type`
+- `INVALID_AGENT_ID` for invalid `:agentId`
+- `LINK_CONFLICT` for conflicting existing paths
 
 ## Development
 
